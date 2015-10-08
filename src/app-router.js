@@ -137,32 +137,33 @@
         path = '#' + path;
       }
     }
+
+    // replace acts a silent mode
     if (options && options.replace === true) {
       window.history.replaceState(null, null, path);
     } else {
       window.history.pushState(null, null, path);
-    }
+      // dispatch a popstate event
+      try {
+        var popstateEvent = new PopStateEvent('popstate', {
+          bubbles: false,
+          cancelable: false,
+          state: {}
+        });
 
-    // dispatch a popstate event
-    try {
-      var popstateEvent = new PopStateEvent('popstate', {
-        bubbles: false,
-        cancelable: false,
-        state: {}
-      });
-
-      if ('dispatchEvent_' in window) {
-        // FireFox with polyfill
-        window.dispatchEvent_(popstateEvent);
-      } else {
-        // normal
-        window.dispatchEvent(popstateEvent);
+        if ('dispatchEvent_' in window) {
+          // FireFox with polyfill
+          window.dispatchEvent_(popstateEvent);
+        } else {
+          // normal
+          window.dispatchEvent(popstateEvent);
+        }
+      } catch(error) {
+        // Internet Exploder
+        var fallbackEvent = document.createEvent('CustomEvent');
+        fallbackEvent.initCustomEvent('popstate', false, false, { state: {} });
+        window.dispatchEvent(fallbackEvent);
       }
-    } catch(error) {
-      // Internet Exploder
-      var fallbackEvent = document.createEvent('CustomEvent');
-      fallbackEvent.initCustomEvent('popstate', false, false, { state: {} });
-      window.dispatchEvent(fallbackEvent);
     }
   };
 
@@ -335,9 +336,15 @@
 
   // Data bind the custom element then activate it
   function activateCustomElement(router, elementName, route, url, eventDetail) {
-    var customElement = document.createElement(elementName);
-    var model = createModel(router, route, url, eventDetail);
-    setObjectProperties(customElement, model);
+    var customElement;
+
+    if (route && route.firstElementChild && route.firstElementChild.tagName === elementName.toUpperCase()) {
+      customElement = route.firstElementChild;
+    } else {
+      customElement = document.createElement(elementName);
+    }
+
+    setObjectProperties(customElement, createModel(router, route, url, eventDetail));
     activateElement(router, customElement, url, eventDetail);
   }
 
@@ -368,12 +375,26 @@
   }
 
   // Copy properties from one object to another
-  function setObjectProperties(object, model) {
-    for (var property in model) {
-      if (model.hasOwnProperty(property)) {
-        object[property] = model[property];
+  function setObjectProperties(element, model) {
+    var property;
+    var prev = element._prevState || (element._prevState = {});
+
+    for (property in prev) {
+      if (prev.hasOwnProperty(property) && !model.hasOwnProperty(property)) {
+        if (element.properties && element.properties[property] && element.properties[property].value !== undefined) {
+          element[property] = element.properties[property].value;
+          delete prev[property];
+        }
       }
     }
+
+    for (property in model) {
+      if (model.hasOwnProperty(property)) {
+        prev[property] =  true;
+        element[property] = model[property];
+      }
+    }
+
   }
 
   // Replace the active route's content with the new element
@@ -381,33 +402,24 @@
     // when using core-animated-pages, the router doesn't remove the previousRoute's content right away. if you
     // navigate between 3 routes quickly (ex: /a -> /b -> /c) you might set previousRoute to '/b' before '/a' is
     // removed from the DOM. this verifies old content is removed before switching the reference to previousRoute.
-    deactivateRoute(router.previousRoute);
 
     // update references to the activeRoute, previousRoute, and loadingRoute
+
     router.previousRoute = router.activeRoute;
     router.activeRoute = router.loadingRoute;
     router.loadingRoute = null;
+
     if (router.previousRoute) {
       router.previousRoute.removeAttribute('active');
+      router.previousRoute.style.display = 'none';
     }
-    router.activeRoute.setAttribute('active', 'active');
 
-    // remove the old route's content before loading the new route. core-animated-pages temporarily needs the old and
-    // new route in the DOM at the same time to animate the transition, otherwise we can remove the old route's content
-    // right away. there is one exception for core-animated-pages where the route we're navigating to matches the same
-    // route (ex: path="/article/:id" navigating from /article/0 to /article/1). in this case we have to simply replace
-    // the route's content instead of animating a transition.
-    if (!router.hasAttribute('core-animated-pages') || eventDetail.route === eventDetail.oldRoute) {
-      deactivateRoute(router.previousRoute);
-    }
+    router.activeRoute.setAttribute('active', 'active');
+    router.activeRoute.style.display = '';
 
     // add the new content
-    router.activeRoute.appendChild(element);
-
-    // animate the transition if core-animated-pages are being used
-    if (router.hasAttribute('core-animated-pages')) {
-      router.coreAnimatedPages.selected = router.activeRoute.getAttribute('path');
-      // the 'core-animated-pages-transition-end' event handler in init() will call deactivateRoute() on the previousRoute
+    if (!element.parentNode) {
+      router.activeRoute.appendChild(element);
     }
 
     // scroll to the URL hash if it's present
@@ -421,6 +433,7 @@
 
   // Remove the route's content
   function deactivateRoute(route) {
+
     if (route) {
       // remove the route content
       var node = route.firstChild;
